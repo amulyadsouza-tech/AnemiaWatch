@@ -12,16 +12,6 @@ GSD-STYLE.md
 PROJECT_RULES.md
 model_capabilities.yaml
 
-# Exclude uncompiled frontend source (dist is already built and served by CDN)
-frontend/src/
-frontend/node_modules/
-frontend/public/
-frontend/.oxlintrc.json
-frontend/tsconfig*.json
-frontend/vite.config.ts
-frontend/postcss.config.js
-frontend/tailwind.config.js
-
 # Exclude local test data and databases
 backend/data/*.db
 backend/data/uploads/
@@ -35,7 +25,6 @@ backend/test_*.py
 backend/train_models.py
 
 # Exclude system / agent files
-.git/
 .agent/
 .agents/
 .gemini/
