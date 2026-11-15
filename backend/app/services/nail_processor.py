@@ -1,8 +1,26 @@
 import cv2
 import numpy as np
 import os
-import scipy.ndimage
-import scipy.signal
+def _gaussian_filter_1d(arr, sigma=12):
+    """Pure NumPy 1D Gaussian smoothing (eliminates scipy dependency)."""
+    size = int(6 * sigma + 1)
+    x = np.arange(size) - size // 2
+    kernel = np.exp(-0.5 * (x / sigma) ** 2)
+    kernel /= np.sum(kernel)
+    return np.convolve(arr, kernel, mode="same")
+
+def _find_peaks_1d(arr, distance=25, prominence=9):
+    """Pure NumPy 1D peak detection (eliminates scipy dependency)."""
+    peaks = []
+    n = len(arr)
+    for i in range(1, n - 1):
+        if arr[i] > arr[i - 1] and arr[i] >= arr[i + 1]:
+            left_min = np.min(arr[max(0, i - distance):i])
+            right_min = np.min(arr[i + 1:min(n, i + distance + 1)])
+            if (arr[i] - min(left_min, right_min)) >= prominence:
+                if not peaks or (i - peaks[-1]) >= distance:
+                    peaks.append(i)
+    return peaks
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Image Quality Evaluator
@@ -118,8 +136,8 @@ def _detect_nail_boxes(img_bgr):
             col = np.where(hand_mask[:, x] > 0)[0]
             y_top[i] = col[0] if len(col) > 0 else (by + bh)
 
-        smooth_y = scipy.ndimage.gaussian_filter1d(y_top, 12)
-        peaks, _ = scipy.signal.find_peaks(-smooth_y, distance=max(25, bw // 9), prominence=9)
+        smooth_y = _gaussian_filter_1d(y_top, 12)
+        peaks = _find_peaks_1d(-smooth_y, distance=max(25, bw // 9), prominence=9)
 
         # Filter out doorframe/wall peaks outside active viewport
         valid_peaks = [

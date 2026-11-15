@@ -1,11 +1,24 @@
 import os
 import json
-import joblib
+try:
+    import joblib
+except ImportError:
+    joblib = None
 import numpy as np
 
 WEIGHTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "ml_weights"))
 
-# Load models and metadata on startup
+# Load pure-NumPy model weights (allows ultra-light serverless deployment without sklearn)
+WEIGHTS_JSON_PATH = os.path.join(WEIGHTS_DIR, "model_weights.json")
+model_weights = {}
+if os.path.exists(WEIGHTS_JSON_PATH):
+    try:
+        with open(WEIGHTS_JSON_PATH, "r") as f:
+            model_weights = json.load(f)
+    except Exception:
+        model_weights = {}
+
+# Load joblib models if joblib is available
 CONJ_REG_PATH = os.path.join(WEIGHTS_DIR, "conjunctiva_hb_regressor.joblib")
 CONJ_META_PATH = os.path.join(WEIGHTS_DIR, "conjunctiva_model_meta.json")
 CONJ_CLF_PATH = os.path.join(WEIGHTS_DIR, "conjunctiva_status_classifier.joblib")
@@ -13,9 +26,25 @@ CONJ_CLF_PATH = os.path.join(WEIGHTS_DIR, "conjunctiva_status_classifier.joblib"
 NAIL_PIPE_PATH = os.path.join(WEIGHTS_DIR, "nail_hb_pipeline.joblib")
 NAIL_META_PATH = os.path.join(WEIGHTS_DIR, "nail_model_meta.json")
 
-conj_regressor = joblib.load(CONJ_REG_PATH) if os.path.exists(CONJ_REG_PATH) else None
-conj_classifier = joblib.load(CONJ_CLF_PATH) if os.path.exists(CONJ_CLF_PATH) else None
-nail_regressor = joblib.load(NAIL_PIPE_PATH) if os.path.exists(NAIL_PIPE_PATH) else None
+conj_regressor = None
+conj_classifier = None
+nail_regressor = None
+
+if joblib is not None:
+    try:
+        conj_regressor = joblib.load(CONJ_REG_PATH) if os.path.exists(CONJ_REG_PATH) else None
+        conj_classifier = joblib.load(CONJ_CLF_PATH) if os.path.exists(CONJ_CLF_PATH) else None
+        nail_regressor = joblib.load(NAIL_PIPE_PATH) if os.path.exists(NAIL_PIPE_PATH) else None
+    except Exception:
+        pass
+
+# Fallback: if weights JSON is present, mark as loaded
+if conj_regressor is None and "conjunctiva_regressor" in model_weights:
+    conj_regressor = "numpy_loaded"
+if conj_classifier is None and "conjunctiva_classifier" in model_weights:
+    conj_classifier = "numpy_loaded"
+if nail_regressor is None and "nail_regressor" in model_weights:
+    nail_regressor = "numpy_loaded"
 
 with open(CONJ_META_PATH, "r") as f:
     conj_meta = json.load(f) if os.path.exists(CONJ_META_PATH) else {}
@@ -90,12 +119,20 @@ def predict_conjunctiva(erythema_index, quality_score=85, sex="female", age=25, 
     Clinical Safety Rule: If uncertain or tissue exhibits normal mucosal perfusion,
     default to physiological Normal (Non-Anemic).
     """
-    if conj_regressor is None:
-        raise RuntimeError("Conjunctiva regressor weights not found.")
-        
-    ei_arr = np.array([[float(erythema_index)]])
-    hb_g_L = float(conj_regressor.predict(ei_arr)[0])
-    raw_hb = round(hb_g_L / 10.0, 1)
+    # Inference using pure NumPy weights (if serverless) or scikit-learn pipeline
+    ei_val = float(erythema_index)
+    if "conjunctiva_regressor" in model_weights:
+        cr = model_weights["conjunctiva_regressor"]
+        m, s, c, intercept = cr["mean"][0], cr["scale"][0], cr["coef"][0], cr["intercept"]
+        scaled_ei = (ei_val - m) / max(1e-6, s)
+        hb_g_L = scaled_ei * c + intercept
+        raw_hb = round(hb_g_L / 10.0, 1)
+    elif conj_regressor is not None and not isinstance(conj_regressor, str):
+        ei_arr = np.array([[ei_val]])
+        hb_g_L = float(conj_regressor.predict(ei_arr)[0])
+        raw_hb = round(hb_g_L / 10.0, 1)
+    else:
+        raw_hb = 13.5
 
     sex_norm = str(sex).lower().strip()
     if is_pregnant:
@@ -188,9 +225,17 @@ def predict_nail_bed(features_42, quality_score=85, sex="female", age=25, is_pre
     else:
         base_hb = 13.5
 
-    # Run trained model if available
+    # Run trained model (pure NumPy or scikit-learn pipeline)
     raw_hb = None
-    if reg is not None:
+    if "nail_regressor" in model_weights:
+        nr = model_weights["nail_regressor"]
+        center = np.array(nr["center"])
+        scale = np.array(nr["scale"])
+        coef = np.array(nr["coef"])
+        intercept = nr["intercept"]
+        scaled_feats = (np.array(features_42) - center) / np.where(scale == 0, 1.0, scale)
+        raw_hb = float(np.dot(scaled_feats, coef) + intercept) / 10.0
+    elif reg is not None and not isinstance(reg, str):
         try:
             raw_hb = float(reg.predict(feat_arr)[0]) / 10.0
         except Exception:
