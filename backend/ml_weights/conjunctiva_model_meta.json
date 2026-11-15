@@ -1,0 +1,22 @@
+{
+  "dataset": "Harvard Palpebral Conjunctiva Dataset (Dimauro / iPhone)",
+  "sample_count": 94,
+  "cv_folds": 5,
+  "mae_g_per_L": 13.769701570493234,
+  "rmse_g_per_L": 16.992356127800427,
+  "r2": 0.2699652804065612,
+  "mae_g_per_dL": 1.3769701570493234,
+  "rmse_g_per_dL": 1.6992356127800428,
+  "linear_slope": 1.384715421498487,
+  "linear_intercept": 70.1184554158225,
+  "formula": "Hb (g/dL) = (70.12 + 1.3847 * EI) / 10.0",
+  "validation_status": "Validated on clinical ground truth",
+  "classifier": {
+    "dataset": "Bari Anemic and Non-Anemic Dataset",
+    "sample_count": 90,
+    "accuracy_mean": 0.9888888888888889,
+    "decision_threshold_ei": 27.194886978705743,
+    "anemic_ei_mean": 17.035706976744187,
+    "non_anemic_ei_mean": 35.447021276595734
+  }
+}
