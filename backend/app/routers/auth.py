@@ -82,6 +82,7 @@ def get_current_user(
     return user
 
 @router.post("/guest")
+@router.post("/guest/")
 def guest_login(db: Session = Depends(get_db)):
     user = _get_or_create_guest_user(db)
     token = create_access_token({"sub": user.id, "email": user.email, "role": user.role})
@@ -106,31 +107,44 @@ def guest_login(db: Session = Depends(get_db)):
     }
 
 @router.post("/register")
+@router.post("/register/")
 def register(req: RegisterRequest, db: Session = Depends(get_db)):
-    existing = db.query(User).filter(User.email == req.email.lower().strip()).first()
+    email = req.email.lower().strip() if req.email else ""
+    if not email:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email is required")
+    if not req.password or len(req.password) < 6:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password must be at least 6 characters")
+    if not req.full_name or not req.full_name.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Full name is required")
+
+    existing = db.query(User).filter(User.email == email).first()
     if existing:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email is already registered")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email is already registered. Please sign in or use another email.")
         
-    user = User(
-        email=req.email.lower().strip(),
-        hashed_password=hash_password(req.password),
-        full_name=req.full_name.strip(),
-        role=req.role if req.role in ["patient", "doctor"] else "patient"
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    
-    profile = PatientProfile(
-        user_id=user.id,
-        age=req.age or 25,
-        sex=req.sex or "female",
-        is_pregnant=req.is_pregnant or False,
-        blood_type=req.blood_type,
-        phone=req.phone
-    )
-    db.add(profile)
-    db.commit()
+    try:
+        user = User(
+            email=email,
+            hashed_password=hash_password(req.password),
+            full_name=req.full_name.strip(),
+            role=req.role if req.role in ["patient", "doctor"] else "patient"
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        
+        profile = PatientProfile(
+            user_id=user.id,
+            age=req.age or 25,
+            sex=req.sex or "female",
+            is_pregnant=req.is_pregnant or False,
+            blood_type=req.blood_type,
+            phone=req.phone
+        )
+        db.add(profile)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Registration failed: {str(e)}")
     
     token = create_access_token({"sub": user.id, "email": user.email, "role": user.role})
     return {
@@ -153,6 +167,7 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
     }
 
 @router.post("/login")
+@router.post("/login/")
 def login(req: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == req.email.lower().strip()).first()
     if not user or not verify_password(req.password, user.hashed_password):

@@ -1,8 +1,9 @@
 import os
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
 
 from backend.app.database import engine, Base, SessionLocal
 from backend.app.routers import auth, screening, doctor
@@ -73,12 +74,13 @@ app = FastAPI(
 # Default "*" keeps local dev working without any env setup.
 _raw_origins = os.environ.get("ALLOWED_ORIGINS", "*")
 ALLOWED_ORIGINS: list[str] = [o.strip() for o in _raw_origins.split(",") if o.strip()]
-if not ALLOWED_ORIGINS:
+if not ALLOWED_ORIGINS or "*" in ALLOWED_ORIGINS:
     ALLOWED_ORIGINS = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=r"https://.*\.vercel\.app" if ALLOWED_ORIGINS != ["*"] else None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -88,6 +90,17 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(screening.router)
 app.include_router(doctor.router)
+
+# Direct aliases for auth endpoints without /api prefix to avoid 405 if called without prefix
+@app.post("/auth/register")
+@app.post("/auth/register/")
+def register_alias(req: auth.RegisterRequest, db: Session = Depends(auth.get_db)):
+    return auth.register(req, db)
+
+@app.post("/auth/login")
+@app.post("/auth/login/")
+def login_alias(req: auth.LoginRequest, db: Session = Depends(auth.get_db)):
+    return auth.login(req, db)
 
 @app.get("/api/health")
 def health_check():
@@ -113,12 +126,13 @@ if os.path.exists(DIST_DIR):
     if os.path.exists(ASSETS_DIR):
         app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
 
-    @app.get("/{full_path:path}")
+    @app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"])
     async def serve_spa(request: Request, full_path: str):
         # API routes are handled by the routers above; only serve SPA for non-API paths
-        if full_path.startswith("api/") or full_path.startswith("api"):
-            from fastapi import HTTPException
+        if full_path.startswith("api/") or full_path.startswith("api") or full_path.startswith("auth"):
             raise HTTPException(status_code=404, detail="API endpoint not found")
+        if request.method != "GET":
+            raise HTTPException(status_code=404, detail="Endpoint not found")
         file_path = os.path.join(DIST_DIR, full_path)
         if full_path and os.path.isfile(file_path):
             return FileResponse(file_path)

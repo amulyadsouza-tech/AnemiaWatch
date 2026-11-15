@@ -22,18 +22,24 @@ export const RegisterScreen: React.FC = () => {
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (!fullName || !email || !password) {
+    const cleanName = fullName.trim();
+    const cleanEmail = email.trim();
+    if (!cleanName || !cleanEmail || !password) {
       setError('Please complete all required fields.');
+      return;
+    }
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters long.');
       return;
     }
     setLoading(true);
     try {
       const res = await api.register({
-        email,
+        email: cleanEmail,
         password,
-        full_name: fullName,
+        full_name: cleanName,
         role,
-        age: Number(age),
+        age: Number(age) || 24,
         sex,
         is_pregnant: isPregnant
       });

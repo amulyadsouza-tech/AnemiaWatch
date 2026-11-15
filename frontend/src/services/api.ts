@@ -1,7 +1,27 @@
-// In production (Vercel), VITE_API_URL points to the Render backend.
-// In local dev, it's empty so the Vite proxy forwards /api → localhost:8000.
-const BACKEND_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
-const API_BASE = `${BACKEND_BASE}/api`;
+// Resolve backend base URL cleanly:
+// 1. If VITE_API_URL is configured, use it.
+// 2. If in production (Vercel) and VITE_API_URL was omitted at build time,
+//    fallback to the deployed Render backend so requests never hit Vercel static hosting (which returns 405).
+// 3. In local dev (localhost), leave empty so Vite dev proxy handles /api → localhost:8000.
+const envBackend = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
+const isVercelHost = typeof window !== 'undefined' && (
+  window.location.hostname.endsWith('.vercel.app') ||
+  window.location.hostname.includes('vercel')
+);
+
+const DEFAULT_RENDER_BACKEND = 'https://anemiawatch-backend.onrender.com';
+
+let normalizedBackend = envBackend;
+if (!normalizedBackend && (isVercelHost || import.meta.env.PROD)) {
+  normalizedBackend = DEFAULT_RENDER_BACKEND;
+}
+
+if (normalizedBackend.endsWith('/api')) {
+  normalizedBackend = normalizedBackend.slice(0, -4);
+}
+
+export const BACKEND_BASE = normalizedBackend;
+export const API_BASE = BACKEND_BASE ? `${BACKEND_BASE}/api` : '/api';
 
 /**
  * Converts a relative image URL returned by the backend (/api/screening/file/...)
@@ -44,11 +64,12 @@ async function request<T = any>(
   fallbackError = 'System error occurred'
 ): Promise<T> {
   let res: Response;
+  const targetUrl = `${API_BASE}${endpoint}`;
   try {
-    res = await fetch(`${API_BASE}${endpoint}`, options);
+    res = await fetch(targetUrl, options);
   } catch (err: any) {
     throw new Error(
-      'Unable to connect to the backend service. Please try again later.'
+      'Unable to connect to the backend service. If using Render free tier, the server may take 30-60 seconds to spin up from sleep. Please try again shortly.'
     );
   }
 
@@ -76,10 +97,14 @@ async function request<T = any>(
         errorMsg = json.message;
       }
     } else {
-      if (res.status === 502 || res.status === 503 || res.status === 504) {
-        errorMsg = 'Backend service is currently unavailable. Please try again shortly.';
+      if (res.status === 405) {
+        errorMsg = 'Method not allowed (405). The request was rejected by the server or routed to the frontend host instead of the API backend. Please ensure VITE_API_URL points to the backend.';
+      } else if (res.status === 500) {
+        errorMsg = 'Internal server or database error (500). Please check backend database logs.';
+      } else if (res.status === 502 || res.status === 503 || res.status === 504) {
+        errorMsg = 'Backend service is currently unavailable or starting up (Render free tier may take ~30s to wake up). Please try again shortly.';
       } else if (res.status === 404) {
-        errorMsg = 'API endpoint not found (404).';
+        errorMsg = 'API endpoint not found (404). Please verify backend service URL.';
       } else if (res.status === 401) {
         errorMsg = 'Session expired or invalid email/password.';
       } else {
