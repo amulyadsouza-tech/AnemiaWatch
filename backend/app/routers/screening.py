@@ -17,7 +17,17 @@ from backend.app.services.pdf_generator import generate_screening_pdf
 
 router = APIRouter(prefix="/api/screening", tags=["Screening"])
 
-UPLOAD_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads"))
+IS_SERVERLESS = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+
+if IS_SERVERLESS:
+    UPLOAD_ROOT = "/tmp/uploads"
+else:
+    UPLOAD_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads"))
+    try:
+        os.makedirs(UPLOAD_ROOT, exist_ok=True)
+    except OSError:
+        UPLOAD_ROOT = "/tmp/uploads"
+
 os.makedirs(UPLOAD_ROOT, exist_ok=True)
 
 @router.post("/nail")
