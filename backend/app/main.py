@@ -69,10 +69,16 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS setup
+# CORS setup – read allowed origins from env var so Render can restrict to Vercel domain.
+# Default "*" keeps local dev working without any env setup.
+_raw_origins = os.environ.get("ALLOWED_ORIGINS", "*")
+ALLOWED_ORIGINS: list[str] = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+if not ALLOWED_ORIGINS:
+    ALLOWED_ORIGINS = ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

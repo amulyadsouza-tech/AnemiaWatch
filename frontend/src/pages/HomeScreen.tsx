@@ -61,12 +61,13 @@ export const HomeScreen: React.FC = () => {
         </div>
 
         {/* Clean Character illustration resting on the white card without overlapping icons */}
-        <div className="absolute right-3 bottom-0 w-[110px] h-[140px] pointer-events-none select-none z-10">
+        <div className="absolute right-2 bottom-0 w-[105px] h-[132px] pointer-events-none select-none z-10 overflow-hidden">
           <img
             src="/assets/home_character.png"
-            alt="AnemiaWatch Character"
-            className="w-full h-full object-contain object-bottom"
-            onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }}
+            alt=""
+            aria-hidden="true"
+            className="w-full h-full object-contain object-bottom drop-shadow-sm"
+            onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }}
           />
         </div>
       </div>

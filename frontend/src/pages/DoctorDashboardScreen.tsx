@@ -5,7 +5,7 @@ import {
   ChevronRight, Smartphone, LogOut, ShieldAlert
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { api } from '../services/api';
+import { api, getImageUrl } from '../services/api';
 
 export const DoctorDashboardScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -398,7 +398,7 @@ export const DoctorDashboardScreen: React.FC = () => {
                               </span>
                               <div className="aspect-[4/3] bg-slate-100 rounded-2xl overflow-hidden border border-slate-200">
                                 <img
-                                  src={selectedScreening.original_image_url}
+                                  src={getImageUrl(selectedScreening.original_image_url)}
                                   alt="Original"
                                   className="w-full h-full object-cover"
                                 />
@@ -410,7 +410,7 @@ export const DoctorDashboardScreen: React.FC = () => {
                               </span>
                               <div className="aspect-[4/3] bg-slate-100 rounded-2xl overflow-hidden border border-slate-200">
                                 <img
-                                  src={selectedScreening.processed_image_url}
+                                  src={getImageUrl(selectedScreening.processed_image_url)}
                                   alt="Annotated"
                                   className="w-full h-full object-cover"
                                 />

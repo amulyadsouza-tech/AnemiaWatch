@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { ArrowLeft, Download, RefreshCw, Clock, CheckCircle2, AlertTriangle, ShieldAlert, Sparkles, Home } from 'lucide-react';
-import { api } from '../services/api';
+import { api, getImageUrl } from '../services/api';
 import { BottomNav } from '../components/BottomNav';
 import type { ScreeningResult } from '../types';
 
@@ -175,7 +175,7 @@ export const ResultsScreen: React.FC = () => {
 
           <div className="w-full aspect-[4/3] bg-slate-100 rounded-2xl overflow-hidden relative border border-slate-200 flex items-center justify-center">
             <img
-              src={viewMode === 'processed' ? data.processed_image_url : data.original_image_url}
+              src={viewMode === 'processed' ? getImageUrl(data.processed_image_url) : getImageUrl(data.original_image_url)}
               alt="Screening Inspection"
               className="w-full h-full object-contain"
             />

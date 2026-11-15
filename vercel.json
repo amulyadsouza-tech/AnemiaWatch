@@ -1,20 +1,9 @@
 {
   "version": 2,
-  "buildCommand": "npm --prefix frontend install && npm --prefix frontend run build",
+  "buildCommand": "cd frontend && npm install && npm run build",
   "outputDirectory": "frontend/dist",
   "framework": "vite",
-  "functions": {
-    "api/index.py": {
-      "maxDuration": 30,
-      "includeFiles": "backend/**",
-      "excludeFiles": "{frontend/**,image and vedio reference on uiux/**,hemoglobin-deficiency-detection/**,Anemia_detection/**}"
-    }
-  },
   "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "/api/index.py"
-    },
     {
       "source": "/(.*)",
       "destination": "/index.html"

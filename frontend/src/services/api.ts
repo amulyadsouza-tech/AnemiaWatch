@@ -1,4 +1,18 @@
-const API_BASE = '/api';
+// In production (Vercel), VITE_API_URL points to the Render backend.
+// In local dev, it's empty so the Vite proxy forwards /api → localhost:8000.
+const BACKEND_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+const API_BASE = `${BACKEND_BASE}/api`;
+
+/**
+ * Converts a relative image URL returned by the backend (/api/screening/file/...)
+ * into an absolute URL using the same BACKEND_BASE.
+ * If the URL is already absolute (starts with http), it is returned as-is.
+ */
+export function getImageUrl(relativeUrl: string | null | undefined): string {
+  if (!relativeUrl) return '';
+  if (relativeUrl.startsWith('http')) return relativeUrl;
+  return `${BACKEND_BASE}${relativeUrl}`;
+}
 
 export async function ensureAuthToken(): Promise<string> {
   let token = localStorage.getItem('anemiawatch_token');
@@ -34,7 +48,7 @@ async function request<T = any>(
     res = await fetch(`${API_BASE}${endpoint}`, options);
   } catch (err: any) {
     throw new Error(
-      'Unable to connect to backend server. Please verify backend service is running on port 8000.'
+      'Unable to connect to the backend service. Please try again later.'
     );
   }
 
@@ -63,7 +77,7 @@ async function request<T = any>(
       }
     } else {
       if (res.status === 502 || res.status === 503 || res.status === 504) {
-        errorMsg = 'Backend service currently unavailable (502/504). Please ensure backend server is running on port 8000.';
+        errorMsg = 'Backend service is currently unavailable. Please try again shortly.';
       } else if (res.status === 404) {
         errorMsg = 'API endpoint not found (404).';
       } else if (res.status === 401) {
@@ -166,9 +180,10 @@ export const api = {
 
   getPdfUrl(id: number | string) {
     const token = localStorage.getItem('anemiawatch_token');
+    const base = `${BACKEND_BASE}/api`;
     return token
-      ? `${API_BASE}/screening/${id}/pdf?token=${encodeURIComponent(token)}`
-      : `${API_BASE}/screening/${id}/pdf`;
+      ? `${base}/screening/${id}/pdf?token=${encodeURIComponent(token)}`
+      : `${base}/screening/${id}/pdf`;
   },
 
   // Doctor
