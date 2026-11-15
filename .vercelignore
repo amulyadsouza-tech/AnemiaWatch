@@ -1,8 +1,10 @@
-# Exclude heavy non-runtime and media assets from Vercel Lambda bundle
+# Non-runtime documentation and heavy reference datasets
 image and vedio reference on uiux/
 hemoglobin-deficiency-detection/
 Anemia_detection/
 *.ipynb
+*.docx
+*.pptx
 *.bat
 *.sh
 *.ps1
@@ -11,8 +13,9 @@ adapters/
 GSD-STYLE.md
 PROJECT_RULES.md
 model_capabilities.yaml
+README_ANEMIAWATCH.md
 
-# Exclude local test data and databases
+# Local test data and databases
 backend/data/*.db
 backend/data/uploads/
 backend/data/test_*
@@ -24,7 +27,8 @@ backend/data/verified_*
 backend/test_*.py
 backend/train_models.py
 
-# Exclude system / agent files
+# Internal agent and IDE files
+.git/
 .agent/
 .agents/
 .gemini/
