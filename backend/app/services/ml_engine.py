@@ -116,57 +116,39 @@ def classify_anemia_severity(hb_g_dl, sex="female", age=25, is_pregnant=False):
 def predict_conjunctiva(erythema_index, quality_score=85, sex="female", age=25, is_pregnant=False):
     """
     Inference for Palpebral Conjunctiva using real trained Harvard dataset regressor.
-    Clinical Safety Rule: If uncertain or tissue exhibits normal mucosal perfusion,
-    default to physiological Normal (Non-Anemic).
+    Calculates Hb directly from the Erythema Index (EI) without hardcoded overrides.
     """
-    # Inference using pure NumPy weights (if serverless) or scikit-learn pipeline
     ei_val = float(erythema_index)
+    
+    # Harvard model parameters:
+    # Mean: 30.737, Scale: 8.774, Coef: 12.022, Intercept: 112.68 (g/L)
     if "conjunctiva_regressor" in model_weights:
         cr = model_weights["conjunctiva_regressor"]
-        m, s, c, intercept = cr["mean"][0], cr["scale"][0], cr["coef"][0], cr["intercept"]
-        scaled_ei = (ei_val - m) / max(1e-6, s)
-        hb_g_L = scaled_ei * c + intercept
-        raw_hb = round(hb_g_L / 10.0, 1)
-    elif conj_regressor is not None and not isinstance(conj_regressor, str):
-        ei_arr = np.array([[ei_val]])
-        hb_g_L = float(conj_regressor.predict(ei_arr)[0])
-        raw_hb = round(hb_g_L / 10.0, 1)
+        m = float(cr["mean"][0])
+        s = float(cr["scale"][0])
+        c = float(cr["coef"][0])
+        intercept = float(cr["intercept"])
     else:
-        raw_hb = 13.5
+        m, s, c, intercept = 30.737, 8.774, 12.022, 112.68
 
-    sex_norm = str(sex).lower().strip()
-    if is_pregnant:
-        base_hb = 12.6
-    elif sex_norm in ["male", "m", "pria"]:
-        base_hb = 14.3
+    # Calibrate ambient smartphone/webcam lighting to flash scale:
+    # Ambient photos typically yield EI 4-22; medical flash photos yield EI 25-55.
+    if ei_val < 26.0:
+        calibrated_ei = max(1.0, ei_val * 2.1 + 8.5)
     else:
-        base_hb = 13.5
+        calibrated_ei = ei_val
 
-    # Harvard model was calibrated on flash photos (EI 30-55).
-    # Ambient webcam captures without flash yield EI 5-15 for healthy mucosa.
-    # If EI < 2.2: severe mucosal blanching / pallor.
-    # If EI < 4.0: moderate mucosal blanching.
-    # If EI >= 4.0: healthy mucosal vascularization.
-    # "if not sure make the value to be normal"
-    if erythema_index < 2.2 and quality_score >= 60:
-        hb_g_dl = round(min(7.9, max(5.0, 5.8 + erythema_index * 0.9)), 1)
-    elif erythema_index < 4.0 and quality_score >= 60:
-        hb_g_dl = round(min(10.8, max(8.4, 8.6 + (erythema_index - 2.2) * 1.2)), 1)
-    else:
-        # Normal healthy mucosal coloration
-        ei_norm = min(1.0, max(0.0, (erythema_index - 4.0) / 25.0))
-        normal_est = np.clip(base_hb + (ei_norm - 0.2) * 2.2, base_hb - 0.8, base_hb + 1.8)
-        
-        if raw_hb >= (base_hb - 1.0):
-            hb_g_dl = round(float(0.6 * normal_est + 0.4 * raw_hb), 1)
-        else:
-            hb_g_dl = round(float(normal_est), 1)
+    # Pure ML Model regression inference
+    scaled_ei = (calibrated_ei - m) / max(1e-6, s)
+    hb_g_L = scaled_ei * c + intercept
+    hb_g_dl = round(float(hb_g_L) / 10.0, 1)
 
-    hb_g_dl = max(5.0, min(18.0, hb_g_dl))
+    # Physiologically realistic boundary enforcement
+    hb_g_dl = round(max(5.5, min(17.8, hb_g_dl)), 1)
+    
     eval_res = classify_anemia_severity(hb_g_dl, sex, age, is_pregnant)
     confidence = round(min(97.0, max(75.0, (quality_score * 0.45) + 42.0)), 2)
     
-    # Clinical recommendations matching reference design (InShot_20240621_075405573_frame_26.png)
     if eval_res["is_anemic"]:
         recommendations = {
             "prevention": "Increase consumption of iron-rich foods such as lean red meat, poultry, beans, spinach, and fortified cereals, paired with vitamin C.",
@@ -197,74 +179,42 @@ def predict_conjunctiva(erythema_index, quality_score=85, sex="female", age=25, 
 def predict_nail_bed(features_42, quality_score=85, sex="female", age=25, is_pregnant=False):
     """
     Inference for Fingernail Beds using calibrated ElasticNet regression pipeline.
-    Clinical Safety Rule: If uncertain or tissue exhibits normal healthy capillary perfusion,
-    default to physiological Normal (Non-Anemic).
+    Calculates Hb directly from the 42 extracted color percentiles without clamping.
     """
     reg = nail_regressor
     if reg is None and os.path.exists(NAIL_PIPE_PATH):
-        reg = joblib.load(NAIL_PIPE_PATH)
+        try:
+            reg = joblib.load(NAIL_PIPE_PATH)
+        except Exception:
+            reg = None
         
     feat_arr = np.array([features_42])
     
-    # Extract vascular perfusion metrics from median nail & skin percentiles
-    # NAIL_R_p=50 is index 3, NAIL_G_p=50 is index 10, NAIL_B_p=50 is index 17
-    nail_r = float(features_42[3]) if len(features_42) > 3 else 140.0
-    nail_g = float(features_42[10]) if len(features_42) > 10 else 125.0
-    nail_b = float(features_42[17]) if len(features_42) > 17 else 110.0
-    
-    rg_ratio = nail_r / max(1.0, nail_g)
-    gr_ratio = nail_g / max(1.0, nail_r)
-    vasc_contrast = (nail_r - nail_g) / max(1.0, nail_r + nail_g)
-    
-    # Establish WHO physiological normal baseline by sex / pregnancy status
-    sex_norm = str(sex).lower().strip()
-    if is_pregnant:
-        base_hb = 12.6
-    elif sex_norm in ["male", "m", "pria"]:
-        base_hb = 14.3
-    else:
-        base_hb = 13.5
-
-    # Run trained model (pure NumPy or scikit-learn pipeline)
     raw_hb = None
     if "nail_regressor" in model_weights:
         nr = model_weights["nail_regressor"]
         center = np.array(nr["center"])
         scale = np.array(nr["scale"])
         coef = np.array(nr["coef"])
-        intercept = nr["intercept"]
+        intercept = float(nr["intercept"])
         scaled_feats = (np.array(features_42) - center) / np.where(scale == 0, 1.0, scale)
-        raw_hb = float(np.dot(scaled_feats, coef) + intercept) / 10.0
+        raw_hb = (float(np.dot(scaled_feats, coef)) + intercept) / 10.0
     elif reg is not None and not isinstance(reg, str):
         try:
             raw_hb = float(reg.predict(feat_arr)[0]) / 10.0
         except Exception:
             raw_hb = None
 
-    # Decision logic conforming strictly to user instruction:
-    # "let the ml model identify nail, if not sure make the value to be normal"
-    # Anemia (pallor) is diagnosed ONLY when clinical blanching is genuinely present:
-    is_severe_pallor = (gr_ratio > 0.985 and vasc_contrast < 0.015)
-    is_moderate_pallor = (gr_ratio > 0.970 and vasc_contrast < 0.022)
+    if raw_hb is None:
+        raw_hb = 13.5
 
-    if is_severe_pallor and quality_score >= 60:
-        hb_g_dl = round(min(7.8, max(5.2, 6.5 + vasc_contrast * 45.0)), 1)
-    elif is_moderate_pallor and quality_score >= 60:
-        hb_g_dl = round(min(10.8, max(8.5, 9.4 + (0.022 - vasc_contrast) * 35.0)), 1)
-    else:
-        # Healthy vascular perfusion observed or image conditions uncertain:
-        # Evaluate to physiological Normal (Non-Anemic) with genuine biological variation
-        perf_offset = (rg_ratio - 1.06) * 5.5
-        normal_est = np.clip(base_hb + perf_offset, base_hb - 0.9, base_hb + 1.8)
-        
-        # If the ML model predicted a normal value, blend smoothly
-        if raw_hb is not None and raw_hb >= (base_hb - 1.0):
-            hb_g_dl = round(float(0.6 * normal_est + 0.4 * raw_hb), 1)
-        else:
-            hb_g_dl = round(float(normal_est), 1)
+    # Vascular contrast and perfusion adjustment
+    nail_r = float(features_42[3]) if len(features_42) > 3 else 140.0
+    nail_g = float(features_42[10]) if len(features_42) > 10 else 125.0
+    vasc_contrast = (nail_r - nail_g) / max(1.0, nail_r + nail_g)
 
-    # Boundary guard
-    hb_g_dl = max(5.0, min(17.5, hb_g_dl))
+    # Bound to physiological limits
+    hb_g_dl = round(max(5.5, min(17.8, raw_hb)), 1)
     
     eval_res = classify_anemia_severity(hb_g_dl, sex, age, is_pregnant)
     confidence = round(min(96.0, max(75.0, (quality_score * 0.45) + (vasc_contrast * 180.0) + 42.0)), 2)

@@ -17,31 +17,30 @@ def calculate_erythema_index(r_mean, g_mean):
 def segment_palpebral_conjunctiva(eye_roi_bgr):
     """
     Segments palpebral conjunctiva within eye ROI:
-    - Focuses strictly on lower eyelid mucosal shelf (0.46*h to 0.78*h)
-    - Excludes fingers pulling the eyelid (y > 0.78*h)
+    - Focuses on the exposed lower eyelid mucosal shelf
     - Excludes white sclera (high brightness, balanced R=G=B)
     - Excludes dark iris / pupil (low brightness)
     - Isolates vascular mucosal redness in the lower eyelid
     """
     h, w = eye_roi_bgr.shape[:2]
     
-    # Lower eyelid mucosal shelf is strictly between 0.46*h and 0.78*h (avoids fingers below)
-    y0 = int(h * 0.46)
-    y1 = int(h * 0.78)
+    # Lower eyelid mucosal shelf is typically in lower 65% of the eye box
+    y0 = int(h * 0.35)
+    y1 = int(h * 0.90)
     
     b, g, r = cv2.split(eye_roi_bgr)
     
     # Blood-rich mucosal color mask:
     red_diff = r.astype(np.float32) - g.astype(np.float32)
     # Exclude white sclera where r, g, b are all high and close:
-    is_sclera = (r > 195) & (g > 195) & (b > 195)
+    is_sclera = (r > 190) & (g > 190) & (b > 190)
     # Exclude dark iris/pupil:
-    is_dark = (r < 55) & (g < 55) & (b < 55)
+    is_dark = (r < 50) & (g < 50) & (b < 50)
     # Exclude specular flash glare:
     is_glare = (r > 245) & (g > 245)
     
-    # Conjunctiva mask restricted to anatomical lower lid zone
-    conjunctiva_mask = (red_diff > 8) & (r > 85) & (~is_sclera) & (~is_dark) & (~is_glare)
+    # Conjunctiva mask restricted to lower lid zone
+    conjunctiva_mask = (red_diff > 10) & (r > 80) & (b < 165) & (~is_sclera) & (~is_dark) & (~is_glare)
     y_indices = np.arange(h)[:, None]
     conjunctiva_mask = conjunctiva_mask & (y_indices >= y0) & (y_indices <= y1)
     
@@ -51,19 +50,19 @@ def segment_palpebral_conjunctiva(eye_roi_bgr):
     mask_cleaned = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel, iterations=1)
     mask_cleaned = cv2.morphologyEx(mask_cleaned, cv2.MORPH_CLOSE, kernel, iterations=1)
     
-    # Find components; reject giant finger/cheek components (> 4500 px)
+    # Find components
     contours, _ = cv2.findContours(mask_cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     final_mask = np.zeros((h, w), dtype=np.uint8)
     if contours:
-        valid_contours = [c for c in contours if 30 <= cv2.contourArea(c) <= 4500]
+        valid_contours = [c for c in contours if 25 <= cv2.contourArea(c) <= 6000]
         if valid_contours:
             best_contour = max(valid_contours, key=cv2.contourArea)
             cv2.drawContours(final_mask, [best_contour], -1, 255, -1)
             
-    if np.sum(final_mask) < 40:
+    if np.sum(final_mask) < 30:
         # Fallback anatomical crescent in lower palpebral zone
-        cv2.ellipse(final_mask, (w // 2, int(h * 0.64)), (int(w * 0.28), int(h * 0.08)), 0, 0, 180, 255, -1)
+        cv2.ellipse(final_mask, (w // 2, int(h * 0.65)), (int(w * 0.28), int(h * 0.10)), 0, 0, 180, 255, -1)
         
     return final_mask
 
@@ -72,10 +71,10 @@ def process_conjunctiva_image(image_path, output_dir):
     End-to-end processing of lower eyelid palpebral conjunctiva:
     1. Loads eye image
     2. Validates image quality
-    3. Detects eye socket and lower eyelid (rejects false positive face/chest boxes)
-    4. Segments palpebral conjunctiva (excludes fingers)
+    3. Multi-cascade eye detection with physiological skin-mask validation
+    4. Segments palpebral conjunctiva
     5. Calculates Erythema Index
-    6. Generates visual overlays matching clinical literature
+    6. Generates visual overlays
     """
     img_bgr = cv2.imread(image_path)
     if img_bgr is None:
@@ -85,68 +84,95 @@ def process_conjunctiva_image(image_path, output_dir):
     quality = evaluate_image_quality(img_bgr)
     
     annotated = img_bgr.copy()
-    
-    # Detect eye region: Multi-candidate evaluation to identify the pulled lower eyelid
-    eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
     
-    eyes = eye_cascade.detectMultiScale(gray, scaleFactor=1.05, minNeighbors=3, minSize=(50, 50))
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(140, 140))
+    # Compute skin mask (YCrCb: Cr in [128, 180], Cb in [78, 138])
+    ycrcb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2YCrCb)
+    y_ch, cr, cb = cv2.split(ycrcb)
+    skin_mask = (cr >= 128) & (cr <= 180) & (cb >= 78) & (cb <= 138)
+    
+    # Multi-cascade ensemble for robust eye detection across angles & eyewear
+    cascades = [
+        cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_righteye_2splits.xml'),
+        cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_lefteye_2splits.xml'),
+        cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye_tree_eyeglasses.xml'),
+        cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+    ]
     
     candidates = []
-    # 1. Haar eye candidates with physiological eye aspect ratios
-    for b in eyes:
-        if 65 <= b[2] <= 280 and 45 <= b[3] <= 260:
-            candidates.append((int(b[0]), int(b[1]), int(b[2]), int(b[3])))
-            
-    # 2. Anatomical eye zone candidates if face is detected (left & right eye regions)
-    if len(faces) > 0:
-        fx, fy, fw, fh = faces[0]
-        z1 = (max(0, int(fx + 0.08 * fw)), max(0, int(fy + 0.20 * fh)), int(0.40 * fw), int(0.38 * fh))
-        z2 = (max(0, int(fx + 0.52 * fw)), max(0, int(fy + 0.20 * fh)), int(0.40 * fw), int(0.38 * fh))
-        candidates.append(z1)
-        candidates.append(z2)
+    for cas in cascades:
+        dets = cas.detectMultiScale(gray, scaleFactor=1.05, minNeighbors=2, minSize=(25, 25))
+        for d in dets:
+            bx, by, bw, bh = int(d[0]), int(d[1]), int(d[2]), int(d[3])
+            # Skin neighborhood verification: reject doors, cabinets, and walls
+            sub_skin = skin_mask[max(0, by):min(h, by+bh), max(0, bx):min(w, bx+bw)]
+            if sub_skin.size > 0 and np.mean(sub_skin) >= 0.30:
+                candidates.append((bx, by, bw, bh))
+                
+    # Also check frontal/profile face detections if available
+    face_cas = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    faces = face_cas.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=2, minSize=(100, 100))
+    for fx, fy, fw, fh in faces:
+        # Left and right eye zones of detected face
+        candidates.append((int(fx + 0.10 * fw), int(fy + 0.22 * fh), int(0.36 * fw), int(0.36 * fh)))
+        candidates.append((int(fx + 0.54 * fw), int(fy + 0.22 * fh), int(0.36 * fw), int(0.36 * fh)))
         
-    def _score_pulled_eye(box):
-        """Scores candidate eye region by mucosal exposure and vascular redness in lower lid zone."""
+    def _score_eye_candidate(box):
+        """Scores candidate box by exposed mucosal redness and presence of pupil/iris."""
         bx, by, bw, bh = box
-        roi = img_bgr[by:min(h, by + bh), bx:min(w, bx + bw)]
+        roi = img_bgr[by:min(h, by+bh), bx:min(w, bx+bw)]
         if roi.size == 0:
             return -1.0
-        rh, rw = roi.shape[:2]
-        shelf = roi[int(0.42 * rh):int(0.82 * rh), :]
-        b_ch, g_ch, r_ch = cv2.split(shelf)
-        diff = r_ch.astype(float) - g_ch.astype(float)
-        # Mucosal redness: excess of red over green and blue, excluding white sclera
-        is_mucosa = (diff > 18) & (r_ch > 115) & (b_ch < 185)
-        # Sclera immediately above provides anatomical confirmation of an eye
-        is_sclera = (r_ch > 175) & (g_ch > 175) & (b_ch > 175)
+        b_c, g_c, r_c = cv2.split(roi)
+        diff = r_c.astype(float) - g_c.astype(float)
+        # Mucosal redness: excess of red over green, within skin region
+        is_mucosa = (diff > 12) & (r_c > 85) & (b_c < 165)
         mucosa_count = float(np.sum(is_mucosa))
-        sclera_count = float(np.sum(is_sclera))
-        return mucosa_count + min(1500.0, sclera_count * 0.4)
+        
+        # Dark pupil/iris in upper 65% of the eye box
+        top_gray = cv2.cvtColor(roi[:int(bh*0.65), :], cv2.COLOR_BGR2GRAY)
+        min_g = np.min(top_gray) if top_gray.size > 0 else 100
+        pupil_score = max(0, 75 - min_g) * 18.0
+        
+        # Sclera immediately adjacent
+        is_sclera = (r_c > 140) & (g_c > 140) & (b_c > 130) & (np.abs(r_c.astype(int) - g_c.astype(int)) < 30)
+        sclera_score = float(np.sum(is_sclera)) * 0.8
+        
+        return (mucosa_count * 2.8) + pupil_score + sclera_score
 
     if candidates:
-        # Select the candidate eye with maximum exposed palpebral conjunctiva mucosa
-        scored_candidates = [(b, _score_pulled_eye(b)) for b in candidates]
-        scored_candidates.sort(key=lambda t: t[1], reverse=True)
-        chosen = scored_candidates[0][0]
+        scored = [(b, _score_eye_candidate(b)) for b in candidates]
+        scored.sort(key=lambda t: t[1], reverse=True)
+        chosen = scored[0][0]
         ex, ey, ew, eh = chosen
         
-        # Expand slightly downward to ensure the full palpebral margin is included
-        pad_top = int(eh * 0.04)
-        pad_bot = int(eh * 0.25)
-        pad_x = int(ew * 0.06)
+        # Expand slightly downward to ensure the full palpebral mucosal margin is included
+        pad_top = int(eh * 0.05)
+        pad_bot = int(eh * 0.20)
+        pad_x = int(ew * 0.08)
         ey0 = max(0, ey - pad_top)
         ey1 = min(h, ey + eh + pad_bot)
         ex0 = max(0, ex - pad_x)
         ex1 = min(w, ex + ew + pad_x)
         eye_box = (int(ex0), int(ey0), int(ex1 - ex0), int(ey1 - ey0))
     else:
-        # Custom eye alignment overlay fallback (center region)
-        cx, cy = w // 2, int(h * 0.42)
-        ew, eh = int(w * 0.42), int(h * 0.35)
-        eye_box = (max(0, cx - ew // 2), max(0, cy - eh // 2), min(w, ew), min(h, eh))
+        # Fallback: find mucosal redness peak on skin
+        b_all, g_all, r_all = cv2.split(img_bgr)
+        all_diff = r_all.astype(float) - g_all.astype(float)
+        mucosa_map = (all_diff > 14) & (r_all > 90) & (b_all < 155) & skin_mask
+        y_pts, x_pts = np.where(mucosa_map)
+        
+        if len(x_pts) > 30:
+            cx = int(np.median(x_pts))
+            cy = int(np.median(y_pts))
+            ew = max(60, min(150, int(w * 0.28)))
+            eh = max(60, min(150, int(h * 0.25)))
+            eye_box = (max(0, cx - ew // 2), max(0, cy - int(eh * 0.65)), min(w - 10, ew), min(h - 10, eh))
+        else:
+            # Center viewport fallback
+            cx, cy = w // 2, int(h * 0.42)
+            ew, eh = int(w * 0.38), int(h * 0.30)
+            eye_box = (max(0, cx - ew // 2), max(0, cy - eh // 2), min(w, ew), min(h, eh))
         
     bx, by, bw, bh = eye_box
     eye_roi_bgr = img_bgr[by:by+bh, bx:bx+bw]
