@@ -101,7 +101,9 @@ AnemiaWatch/
 *The structure above describes the intended organization; actual directory names may differ.*
 
 ---
-
+Admin	admin@anemiawatch.local	admin1234
+Doctor (approved)	doctor@test.com	doctor1234
+Patient	test@gmail.com	test1234
 ## 🚀 Getting Started
 
 ### Prerequisites
