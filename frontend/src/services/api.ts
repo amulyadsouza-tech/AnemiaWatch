@@ -136,12 +136,64 @@ export const api = {
     }, 'Registration failed');
   },
 
+  async registerDoctor(data: any) {
+    return request('/auth/register/doctor', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }, 'Doctor registration failed');
+  },
+
   async login(data: any) {
     return request('/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     }, 'Login failed');
+  },
+
+  async refreshToken(refreshToken: string) {
+    return request('/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    }, 'Token refresh failed');
+  },
+
+  async logoutBackend(refreshToken?: string) {
+    try {
+      await request('/auth/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+        body: JSON.stringify({ refresh_token: refreshToken || '' }),
+      });
+    } catch {
+      // Ignore network errors on logout
+    }
+  },
+
+  async changePassword(data: { current_password: string; new_password: string }) {
+    return request('/auth/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+      body: JSON.stringify(data),
+    }, 'Password change failed');
+  },
+
+  async forgotPassword(email: string) {
+    return request('/auth/forgot-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    }, 'Password reset request failed');
+  },
+
+  async resetPassword(token: string, newPassword: string) {
+    return request('/auth/reset-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, new_password: newPassword }),
+    }, 'Password reset failed');
   },
 
   async guestLogin() {
@@ -162,6 +214,61 @@ export const api = {
       headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
       body: JSON.stringify(data),
     }, 'Failed to update profile');
+  },
+
+  // Consents & Patient Access
+  async getMyConsents() {
+    return request('/patients/me/consents', {
+      headers: { ...getAuthHeader() },
+    }, 'Failed to load consents');
+  },
+
+  async grantConsent(data: { doctor_id: string; purpose?: string; expires_in_days?: number }) {
+    return request('/patients/me/consents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+      body: JSON.stringify(data),
+    }, 'Failed to grant consent');
+  },
+
+  async revokeConsent(consentId: string) {
+    return request(`/patients/me/consents/${consentId}`, {
+      method: 'DELETE',
+      headers: { ...getAuthHeader() },
+    }, 'Failed to revoke consent');
+  },
+
+  async getApprovedDoctors() {
+    return request('/patients/doctors/available', {
+      headers: { ...getAuthHeader() },
+    }, 'Failed to load doctors list');
+  },
+
+  // Admin
+  async getAdminStats() {
+    return request('/admin/stats', {
+      headers: { ...getAuthHeader() },
+    }, 'Failed to load admin stats');
+  },
+
+  async getPendingDoctors() {
+    return request('/admin/doctors/pending', {
+      headers: { ...getAuthHeader() },
+    }, 'Failed to load pending doctor applications');
+  },
+
+  async reviewDoctor(doctorId: string, approved: boolean, notes?: string) {
+    return request(`/admin/doctors/${doctorId}/verify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+      body: JSON.stringify({ approved, verification_notes: notes }),
+    }, 'Failed to verify doctor');
+  },
+
+  async getAuditLogs(limit = 100, skip = 0) {
+    return request(`/admin/audit-logs?limit=${limit}&skip=${skip}`, {
+      headers: { ...getAuthHeader() },
+    }, 'Failed to load audit logs');
   },
 
   // Screening

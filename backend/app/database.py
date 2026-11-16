@@ -1,21 +1,25 @@
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
+from backend.app.core.config import settings
 
-IS_SERVERLESS = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+db_url = settings.DATABASE_URL
 
-if IS_SERVERLESS:
-    DATABASE_DIR = "/tmp"
+if db_url.startswith("sqlite"):
+    engine = create_engine(
+        db_url,
+        connect_args={"check_same_thread": False}
+    )
 else:
-    DATABASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
-    try:
-        os.makedirs(DATABASE_DIR, exist_ok=True)
-    except OSError:
-        DATABASE_DIR = "/tmp"
+    # PostgreSQL configuration with connection pooling and health check
+    engine = create_engine(
+        db_url,
+        pool_pre_ping=True,
+        pool_size=10,
+        max_overflow=20,
+        pool_recycle=1800
+    )
 
-DATABASE_URL = f"sqlite:///{os.path.join(DATABASE_DIR, 'anemiawatch.db')}"
-
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -25,3 +29,8 @@ def get_db():
         yield db
     finally:
         db.close()
+
+def init_db():
+    """Initializes tables in database."""
+    from backend.app.models import schema
+    Base.metadata.create_all(bind=engine)

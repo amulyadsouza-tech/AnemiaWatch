@@ -7,13 +7,38 @@ export interface UserProfile {
   medical_notes?: string;
 }
 
+export interface DoctorInfo {
+  doctor_id: string;
+  medical_registration_number: string;
+  qualification: string;
+  specialization: string;
+  hospital_or_clinic: string;
+  experience?: string | null;
+  phone_number?: string | null;
+  verification_status: 'pending' | 'verified' | 'rejected';
+}
+
 export interface User {
-  id: number;
+  id: number | string;
   email: string;
   full_name: string;
-  role: 'patient' | 'doctor';
+  role: 'patient' | 'doctor' | 'admin';
   created_at?: string;
+  account_status?: string;
+  email_verified?: boolean;
   profile?: UserProfile;
+  doctor_info?: DoctorInfo;
+}
+
+export interface ConsentRecord {
+  id: string;
+  doctor_id: string;
+  doctor_name: string;
+  specialization: string;
+  hospital_or_clinic: string;
+  status: 'ACTIVE' | 'REVOKED' | 'EXPIRED';
+  granted_at: string;
+  expires_at?: string;
 }
 
 export interface QualityAssessment {

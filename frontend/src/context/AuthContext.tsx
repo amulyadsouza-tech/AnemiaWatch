@@ -6,7 +6,7 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
   loading: boolean;
-  login: (token: string, user: User) => void;
+  login: (token: string, user: User, refreshToken?: string) => void;
   logout: () => void;
   refreshUser: () => Promise<void>;
 }
@@ -28,6 +28,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const data = await api.getMe();
       setUser(data);
     } catch {
+      // Try refresh token if available
+      const storedRefresh = localStorage.getItem('anemiawatch_refresh_token');
+      if (storedRefresh) {
+        try {
+          const res = await api.refreshToken(storedRefresh);
+          if (res.access_token) {
+            localStorage.setItem('anemiawatch_token', res.access_token);
+            if (res.refresh_token) {
+              localStorage.setItem('anemiawatch_refresh_token', res.refresh_token);
+            }
+            setToken(res.access_token);
+            if (res.user) {
+              setUser(res.user);
+              setLoading(false);
+              return;
+            }
+          }
+        } catch {
+          // Refresh failed
+        }
+      }
       logout();
     } finally {
       setLoading(false);
@@ -38,14 +59,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     refreshUser();
   }, [token]);
 
-  const login = (newToken: string, newUser: User) => {
+  const login = (newToken: string, newUser: User, refreshToken?: string) => {
     localStorage.setItem('anemiawatch_token', newToken);
+    if (refreshToken) {
+      localStorage.setItem('anemiawatch_refresh_token', refreshToken);
+    }
     setToken(newToken);
     setUser(newUser);
   };
 
   const logout = () => {
+    const storedRefresh = localStorage.getItem('anemiawatch_refresh_token');
+    api.logoutBackend(storedRefresh || undefined);
     localStorage.removeItem('anemiawatch_token');
+    localStorage.removeItem('anemiawatch_refresh_token');
     setToken(null);
     setUser(null);
   };

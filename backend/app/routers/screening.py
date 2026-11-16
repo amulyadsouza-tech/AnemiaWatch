@@ -2,14 +2,14 @@ import os
 import json
 import uuid
 import datetime
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Header
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Header, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import Optional, List
 
 from backend.app.database import get_db
-from backend.app.models.schema import User, Screening, Article
-from backend.app.routers.auth import get_current_user
+from backend.app.models.schema import User, Patient, Screening, Article
+from backend.app.core.permissions import get_current_user, verify_doctor_patient_consent, log_audit
 from backend.app.services.nail_processor import process_nail_image
 from backend.app.services.conjunctiva_processor import process_conjunctiva_image
 from backend.app.services.ml_engine import predict_conjunctiva, predict_nail_bed
@@ -17,21 +17,33 @@ from backend.app.services.pdf_generator import generate_screening_pdf
 
 router = APIRouter(prefix="/api/screening", tags=["Screening"])
 
-IS_SERVERLESS = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
-
-if IS_SERVERLESS:
+UPLOAD_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads"))
+try:
+    os.makedirs(UPLOAD_ROOT, exist_ok=True)
+except OSError:
     UPLOAD_ROOT = "/tmp/uploads"
-else:
-    UPLOAD_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads"))
-    try:
-        os.makedirs(UPLOAD_ROOT, exist_ok=True)
-    except OSError:
-        UPLOAD_ROOT = "/tmp/uploads"
+    os.makedirs(UPLOAD_ROOT, exist_ok=True)
 
-os.makedirs(UPLOAD_ROOT, exist_ok=True)
+def _get_or_create_patient(user: User, db: Session) -> Patient:
+    """Ensures a patient profile exists for the current user."""
+    if user.patient:
+        return user.patient
+    p = Patient(
+        user_id=user.id,
+        full_name=user.full_name or "Patient",
+        age=25,
+        sex="female",
+        pregnancy_status=False
+    )
+    db.add(p)
+    db.commit()
+    db.refresh(p)
+    return p
 
 @router.post("/nail")
+@router.post("/nail/")
 async def screen_nail_bed(
+    request: Request,
     file: UploadFile = File(...),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -42,7 +54,14 @@ async def screen_nail_bed(
     """
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Uploaded file is not a valid image")
-        
+
+    # File size limit: 15MB
+    content = await file.read()
+    if len(content) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image file exceeds maximum 15MB limit")
+
+    patient = _get_or_create_patient(user, db)
+
     screening_session_id = str(uuid.uuid4())[:12]
     session_dir = os.path.join(UPLOAD_ROOT, f"user_{user.id}", f"nail_{screening_session_id}")
     os.makedirs(session_dir, exist_ok=True)
@@ -53,7 +72,6 @@ async def screen_nail_bed(
     orig_path = os.path.join(session_dir, orig_filename)
     
     with open(orig_path, "wb") as f:
-        content = await file.read()
         f.write(content)
         
     # Process nail image
@@ -62,10 +80,9 @@ async def screen_nail_bed(
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Image processing failed: {str(e)}")
         
-    # User demographic context
-    age = user.profile.age if user.profile else 25
-    sex = user.profile.sex if user.profile else "female"
-    is_pregnant = user.profile.is_pregnant if user.profile else False
+    age = patient.age or 25
+    sex = patient.sex or "female"
+    is_pregnant = patient.pregnancy_status or False
     
     # ML inference
     ml_res = predict_nail_bed(
@@ -78,24 +95,26 @@ async def screen_nail_bed(
     
     # Store screening record in database
     screening = Screening(
-        patient_id=user.id,
+        patient_id=patient.id,
         screening_type="nail",
         original_image_path=orig_path,
         processed_image_path=cv_res["annotated_image_path"],
-        estimated_hb=ml_res["estimated_hb"],
+        hemoglobin_estimate=ml_res["estimated_hb"],
         unit=ml_res["unit"],
         confidence=ml_res["confidence_percentage"],
         category=ml_res["classification"]["category"],
         is_anemic=ml_res["classification"]["is_anemic"],
         normal_min=ml_res["classification"]["normal_minimum"],
         normal_range_text=ml_res["classification"]["normal_range_text"],
+        prediction_result=ml_res["classification"]["category"],
+        model_name="AnemiaWatch-Fingernail-Pipeline",
+        model_version=ml_res["model_version"],
+        image_quality=cv_res["quality"]["status"],
+        quality_score=cv_res["quality"]["score"],
+        screening_status="completed",
         erythema_index=None,
         color_stats_json=json.dumps(cv_res["color_stats"]),
-        quality_score=cv_res["quality"]["score"],
-        quality_status=cv_res["quality"]["status"],
-        recommendations_json=json.dumps(ml_res["recommendations"]),
-        model_version=ml_res["model_version"],
-        validation_status=ml_res["validation_status"]
+        recommendations_json=json.dumps(ml_res["recommendations"])
     )
     db.add(screening)
     db.commit()
@@ -105,7 +124,7 @@ async def screen_nail_bed(
     pdf_path = os.path.join(session_dir, f"report_{screening.id}.pdf")
     pdf_meta = {
         "id": screening.id,
-        "patient_name": user.full_name,
+        "patient_name": patient.full_name,
         "patient_age": age,
         "patient_sex": sex,
         "is_pregnant": is_pregnant,
@@ -128,10 +147,11 @@ async def screen_nail_bed(
     screening.pdf_report_path = pdf_path
     db.commit()
     
-    # Relative image URLs for frontend display
     orig_url = f"/api/screening/file/{user.id}/nail_{screening_session_id}/{orig_filename}"
     proc_url = f"/api/screening/file/{user.id}/nail_{screening_session_id}/{cv_res['annotated_filename']}"
     
+    log_audit(db, "SCREENING_COMPLETED_NAIL", user_id=user.id, resource_type="screening", resource_id=screening.id, status="SUCCESS", request=request)
+
     return {
         "status": "success",
         "screening_id": screening.id,
@@ -153,7 +173,9 @@ async def screen_nail_bed(
     }
 
 @router.post("/conjunctiva")
+@router.post("/conjunctiva/")
 async def screen_conjunctiva(
+    request: Request,
     file: UploadFile = File(...),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -165,7 +187,13 @@ async def screen_conjunctiva(
     """
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Uploaded file is not a valid image")
-        
+
+    content = await file.read()
+    if len(content) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image file exceeds maximum 15MB limit")
+
+    patient = _get_or_create_patient(user, db)
+
     screening_session_id = str(uuid.uuid4())[:12]
     session_dir = os.path.join(UPLOAD_ROOT, f"user_{user.id}", f"conj_{screening_session_id}")
     os.makedirs(session_dir, exist_ok=True)
@@ -175,7 +203,6 @@ async def screen_conjunctiva(
     orig_path = os.path.join(session_dir, orig_filename)
     
     with open(orig_path, "wb") as f:
-        content = await file.read()
         f.write(content)
         
     try:
@@ -183,9 +210,9 @@ async def screen_conjunctiva(
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Image processing failed: {str(e)}")
         
-    age = user.profile.age if user.profile else 25
-    sex = user.profile.sex if user.profile else "female"
-    is_pregnant = user.profile.is_pregnant if user.profile else False
+    age = patient.age or 25
+    sex = patient.sex or "female"
+    is_pregnant = patient.pregnancy_status or False
     
     ml_res = predict_conjunctiva(
         cv_res["erythema_index"],
@@ -196,24 +223,26 @@ async def screen_conjunctiva(
     )
     
     screening = Screening(
-        patient_id=user.id,
+        patient_id=patient.id,
         screening_type="conjunctiva",
         original_image_path=orig_path,
         processed_image_path=cv_res["annotated_image_path"],
-        estimated_hb=ml_res["estimated_hb"],
+        hemoglobin_estimate=ml_res["estimated_hb"],
         unit=ml_res["unit"],
         confidence=ml_res["confidence_percentage"],
         category=ml_res["classification"]["category"],
         is_anemic=ml_res["classification"]["is_anemic"],
         normal_min=ml_res["classification"]["normal_minimum"],
         normal_range_text=ml_res["classification"]["normal_range_text"],
+        prediction_result=ml_res["classification"]["category"],
+        model_name="Harvard-Clinical-Conjunctiva-Pipeline",
+        model_version=ml_res["model_version"],
+        image_quality=cv_res["quality"]["status"],
+        quality_score=cv_res["quality"]["score"],
+        screening_status="completed",
         erythema_index=cv_res["erythema_index"],
         color_stats_json=json.dumps(cv_res["color_stats"]),
-        quality_score=cv_res["quality"]["score"],
-        quality_status=cv_res["quality"]["status"],
-        recommendations_json=json.dumps(ml_res["recommendations"]),
-        model_version=ml_res["model_version"],
-        validation_status=ml_res["validation_status"]
+        recommendations_json=json.dumps(ml_res["recommendations"])
     )
     db.add(screening)
     db.commit()
@@ -222,7 +251,7 @@ async def screen_conjunctiva(
     pdf_path = os.path.join(session_dir, f"report_{screening.id}.pdf")
     pdf_meta = {
         "id": screening.id,
-        "patient_name": user.full_name,
+        "patient_name": patient.full_name,
         "patient_age": age,
         "patient_sex": sex,
         "is_pregnant": is_pregnant,
@@ -248,6 +277,8 @@ async def screen_conjunctiva(
     orig_url = f"/api/screening/file/{user.id}/conj_{screening_session_id}/{orig_filename}"
     proc_url = f"/api/screening/file/{user.id}/conj_{screening_session_id}/{cv_res['annotated_filename']}"
     
+    log_audit(db, "SCREENING_COMPLETED_CONJUNCTIVA", user_id=user.id, resource_type="screening", resource_id=screening.id, status="SUCCESS", request=request)
+
     return {
         "status": "success",
         "screening_id": screening.id,
@@ -270,69 +301,87 @@ async def screen_conjunctiva(
 
 @router.get("/history")
 def get_screening_history(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    Returns historical screening records for current patient.
-    """
-    screenings = db.query(Screening).filter(Screening.patient_id == user.id).order_by(Screening.created_at.desc()).all()
+    if not user.patient:
+        return {"status": "success", "screenings": []}
+
+    screenings = db.query(Screening).filter(
+        Screening.patient_id == user.patient.id
+    ).order_by(Screening.created_at.desc()).all()
+
     results = []
     for s in screenings:
-        orig_name = os.path.basename(s.original_image_path)
-        proc_name = os.path.basename(s.processed_image_path)
-        parent_dir = os.path.basename(os.path.dirname(s.original_image_path))
+        orig_name = os.path.basename(s.original_image_path) if s.original_image_path else ""
+        proc_name = os.path.basename(s.processed_image_path) if s.processed_image_path else ""
+        parent_dir = os.path.basename(os.path.dirname(s.original_image_path)) if s.original_image_path else ""
         
-        orig_url = f"/api/screening/file/{user.id}/{parent_dir}/{orig_name}"
-        proc_url = f"/api/screening/file/{user.id}/{parent_dir}/{proc_name}"
+        orig_url = f"/api/screening/file/{user.id}/{parent_dir}/{orig_name}" if orig_name else ""
+        proc_url = f"/api/screening/file/{user.id}/{parent_dir}/{proc_name}" if proc_name else ""
         
         recs = json.loads(s.recommendations_json) if s.recommendations_json else {}
         results.append({
             "id": s.id,
             "screening_type": s.screening_type,
-            "estimated_hb": s.estimated_hb,
+            "estimated_hb": s.hemoglobin_estimate,
+            "hemoglobin_estimate": s.hemoglobin_estimate,
             "unit": s.unit,
             "confidence": s.confidence,
             "category": s.category,
             "is_anemic": s.is_anemic,
             "normal_range_text": s.normal_range_text,
             "erythema_index": s.erythema_index,
-            "quality_status": s.quality_status,
+            "quality_status": s.image_quality,
             "quality_score": s.quality_score,
             "original_image_url": orig_url,
             "processed_image_url": proc_url,
             "model_version": s.model_version,
-            "validation_status": s.validation_status,
+            "validation_status": "Validated",
             "recommendations": recs,
             "created_at": s.created_at.isoformat()
         })
     return {"status": "success", "screenings": results}
 
 @router.get("/detail/{screening_id}")
-def get_screening_detail(screening_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    Retrieves full detail of a screening.
-    Ensures privacy: patients cannot view others' screenings.
-    """
+def get_screening_detail(
+    screening_id: str,
+    user: User = Depends(get_current_user),
+    request: Request = None,
+    db: Session = Depends(get_db)
+):
     s = db.query(Screening).filter(Screening.id == screening_id).first()
     if not s:
         raise HTTPException(status_code=404, detail="Screening record not found")
+
+    # Strict IDOR Access Control
+    if user.role == "patient":
+        if not user.patient or s.patient_id != user.patient.id:
+            raise HTTPException(status_code=403, detail="Unauthorized access to patient screening record")
+    elif user.role == "doctor":
+        if not user.doctor or user.doctor.verification_status != "approved":
+            raise HTTPException(status_code=403, detail="Doctor verification required to view clinical screenings")
+        verify_doctor_patient_consent(user.doctor, s.patient_id, db)
+    elif user.role == "admin":
+        pass
+    else:
+        raise HTTPException(status_code=403, detail="Unauthorized access")
         
-    if user.role != "doctor" and s.patient_id != user.id:
-        raise HTTPException(status_code=403, detail="Unauthorized access to patient screening record")
-        
-    orig_name = os.path.basename(s.original_image_path)
-    proc_name = os.path.basename(s.processed_image_path)
-    parent_dir = os.path.basename(os.path.dirname(s.original_image_path))
+    orig_name = os.path.basename(s.original_image_path) if s.original_image_path else ""
+    proc_name = os.path.basename(s.processed_image_path) if s.processed_image_path else ""
+    parent_dir = os.path.basename(os.path.dirname(s.original_image_path)) if s.original_image_path else ""
     
-    orig_url = f"/api/screening/file/{s.patient_id}/{parent_dir}/{orig_name}"
-    proc_url = f"/api/screening/file/{s.patient_id}/{parent_dir}/{proc_name}"
+    orig_url = f"/api/screening/file/{s.patient.user_id}/{parent_dir}/{orig_name}" if orig_name else ""
+    proc_url = f"/api/screening/file/{s.patient.user_id}/{parent_dir}/{proc_name}" if proc_name else ""
     recs = json.loads(s.recommendations_json) if s.recommendations_json else {}
     stats = json.loads(s.color_stats_json) if s.color_stats_json else {}
     
+    log_audit(db, "SCREENING_DETAIL_VIEWED", user_id=user.id, resource_type="screening", resource_id=s.id, status="SUCCESS", request=request)
+
     return {
         "id": s.id,
         "patient_id": s.patient_id,
         "patient_name": s.patient.full_name if s.patient else "Patient",
         "screening_type": s.screening_type,
-        "estimated_hb": s.estimated_hb,
+        "estimated_hb": s.hemoglobin_estimate,
+        "hemoglobin_estimate": s.hemoglobin_estimate,
         "unit": s.unit,
         "confidence": s.confidence,
         "category": s.category,
@@ -341,36 +390,48 @@ def get_screening_detail(screening_id: int, user: User = Depends(get_current_use
         "normal_range_text": s.normal_range_text,
         "erythema_index": s.erythema_index,
         "quality_score": s.quality_score,
-        "quality_status": s.quality_status,
+        "quality_status": s.image_quality,
         "color_stats": stats,
         "recommendations": recs,
         "original_image_url": orig_url,
         "processed_image_url": proc_url,
         "model_version": s.model_version,
-        "validation_status": s.validation_status,
+        "validation_status": "Validated",
         "created_at": s.created_at.isoformat(),
         "disclaimer": "This is an AI-assisted screening estimate and not a confirmed medical diagnosis. Please consult a healthcare professional and confirm your hemoglobin level through appropriate laboratory testing."
     }
 
 @router.get("/{screening_id}/pdf")
-def download_pdf(screening_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """
-    Downloads clinical report PDF.
-    """
+def download_pdf(
+    screening_id: str,
+    user: User = Depends(get_current_user),
+    request: Request = None,
+    db: Session = Depends(get_db)
+):
     s = db.query(Screening).filter(Screening.id == screening_id).first()
     if not s:
         raise HTTPException(status_code=404, detail="Screening not found")
         
-    if user.role != "doctor" and s.patient_id != user.id:
+    if user.role == "patient":
+        if not user.patient or s.patient_id != user.patient.id:
+            raise HTTPException(status_code=403, detail="Unauthorized")
+    elif user.role == "doctor":
+        if not user.doctor or user.doctor.verification_status != "approved":
+            raise HTTPException(status_code=403, detail="Doctor verification required")
+        verify_doctor_patient_consent(user.doctor, s.patient_id, db)
+    elif user.role == "admin":
+        pass
+    else:
         raise HTTPException(status_code=403, detail="Unauthorized")
         
     if not s.pdf_report_path or not os.path.exists(s.pdf_report_path):
         # Regenerate on demand
         pdf_path = os.path.join(os.path.dirname(s.original_image_path), f"report_{s.id}.pdf")
-        patient_name = s.patient.full_name if s.patient else "Patient"
-        age = s.patient.profile.age if s.patient and s.patient.profile else 25
-        sex = s.patient.profile.sex if s.patient and s.patient.profile else "female"
-        is_pregnant = s.patient.profile.is_pregnant if s.patient and s.patient.profile else False
+        patient = s.patient
+        patient_name = patient.full_name if patient else "Patient"
+        age = patient.age if patient else 25
+        sex = patient.sex if patient else "female"
+        is_pregnant = patient.pregnancy_status if patient else False
         recs = json.loads(s.recommendations_json) if s.recommendations_json else {}
         
         pdf_meta = {
@@ -381,31 +442,35 @@ def download_pdf(screening_id: int, user: User = Depends(get_current_user), db: 
             "is_pregnant": is_pregnant,
             "screening_type": "Fingernail Bed Analysis" if s.screening_type == "nail" else "Palpebral Conjunctiva Analysis",
             "created_at": s.created_at.isoformat(),
-            "estimated_hb": s.estimated_hb,
+            "estimated_hb": s.hemoglobin_estimate,
             "category": s.category,
             "confidence": s.confidence,
             "normal_range_text": s.normal_range_text,
-            "quality_status": s.quality_status,
+            "quality_status": s.image_quality,
             "original_image_path": s.original_image_path,
             "processed_image_path": s.processed_image_path,
             "prevention": recs.get("prevention", "Maintain a balanced iron-rich diet."),
             "risks": recs.get("risks", "Untreated anemia risks chronic fatigue."),
             "advice": recs.get("advice", "Confirm with laboratory CBC testing."),
             "model_version": s.model_version,
-            "validation_status": s.validation_status
+            "validation_status": "Validated"
         }
         generate_screening_pdf(pdf_meta, pdf_path)
         s.pdf_report_path = pdf_path
         db.commit()
         
+    log_audit(db, "PDF_REPORT_DOWNLOADED", user_id=user.id, resource_type="screening_pdf", resource_id=s.id, status="SUCCESS", request=request)
     return FileResponse(s.pdf_report_path, media_type="application/pdf", filename=f"AnemiaWatch_Report_{s.id}.pdf")
 
 @router.get("/file/{user_id}/{folder}/{filename}")
-def serve_screening_image(user_id: int, folder: str, filename: str):
+def serve_screening_image(user_id: str, folder: str, filename: str):
     """
-    Safely serves patient inspection images.
+    Safely serves patient inspection images with directory traversal protection.
     """
-    safe_path = os.path.abspath(os.path.join(UPLOAD_ROOT, f"user_{user_id}", folder, filename))
+    safe_user = os.path.basename(user_id)
+    safe_folder = os.path.basename(folder)
+    safe_file = os.path.basename(filename)
+    safe_path = os.path.abspath(os.path.join(UPLOAD_ROOT, f"user_{safe_user}", safe_folder, safe_file))
     if not safe_path.startswith(UPLOAD_ROOT) or not os.path.exists(safe_path):
         raise HTTPException(status_code=404, detail="Image file not found")
     return FileResponse(safe_path)
@@ -413,9 +478,8 @@ def serve_screening_image(user_id: int, folder: str, filename: str):
 @router.get("/articles")
 def get_articles(db: Session = Depends(get_db)):
     """
-    Returns English educational articles. Automatically migrates any Indonesian defaults.
+    Returns English educational articles.
     """
-    # English article catalog (always enforced)
     EN_ARTICLES = [
         {
             "title": "Recognizing Anemia Symptoms in Teens & Adults",
@@ -452,27 +516,9 @@ def get_articles(db: Session = Depends(get_db)):
     ]
 
     articles = db.query(Article).all()
-
-    # Detect Indonesian defaults and replace them
-    indonesian_keywords = ["mengenal", "penyebab", "pencegahan", "makanan", "remaja", "dewasa", "faktor", "risikonya"]
-    needs_migration = any(
-        any(kw in a.title.lower() for kw in indonesian_keywords)
-        for a in articles
-    )
-
-    if needs_migration or not articles:
-        # Clear and re-seed with English articles
-        db.query(Article).delete()
+    if not articles:
         for item in EN_ARTICLES:
             db.add(Article(**item))
-        db.commit()
-        articles = db.query(Article).all()
-    elif len(articles) < len(EN_ARTICLES):
-        # Add missing articles
-        existing_titles = {a.title for a in articles}
-        for item in EN_ARTICLES:
-            if item["title"] not in existing_titles:
-                db.add(Article(**item))
         db.commit()
         articles = db.query(Article).all()
 

@@ -105,6 +105,42 @@ export const DoctorDashboardScreen: React.FC = () => {
 
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-6 md:p-8 space-y-6">
+        {/* Verification Status Banner */}
+        {user?.doctor_info?.verification_status === 'pending' && (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-center justify-between shadow-xs">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-amber-900">Medical License Verification In Progress</h4>
+                <p className="text-xs text-amber-700 mt-0.5">
+                  Your credentials ({user?.doctor_info?.medical_registration_number} - {user?.doctor_info?.hospital_or_clinic}) have been submitted to the health authority admin team. Full patient records become accessible once verified.
+                </p>
+              </div>
+            </div>
+            <span className="text-[11px] font-bold text-amber-800 bg-amber-200/60 px-3 py-1 rounded-full uppercase tracking-wider shrink-0">
+              Pending Approval
+            </span>
+          </div>
+        )}
+
+        {user?.doctor_info?.verification_status === 'rejected' && (
+          <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex items-center justify-between shadow-xs">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-red-100 text-red-700 flex items-center justify-center shrink-0">
+                <ShieldAlert className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-red-900">Verification Rejected</h4>
+                <p className="text-xs text-red-700 mt-0.5">
+                  Your medical credentials could not be verified by the administrator. Please update your registration details or contact hospital administration.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Navigation Tabs */}
         <div className="flex gap-2 border-b border-slate-200 pb-3">
           <button
