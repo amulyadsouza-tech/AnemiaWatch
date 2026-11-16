@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Mail, Lock, Eye, EyeOff, AlertCircle, ArrowLeft, Stethoscope, User } from 'lucide-react';
-import { api } from '../services/api';
+import { Mail, Lock, Eye, EyeOff, AlertCircle, ArrowLeft, Stethoscope, User, RefreshCw } from 'lucide-react';
+import { api, getCustomApiUrl, setCustomApiUrl } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
 export const LoginScreen: React.FC = () => {
@@ -13,6 +13,8 @@ export const LoginScreen: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [showServerSettings, setShowServerSettings] = useState(false);
+  const [customUrl, setCustomUrl] = useState(getCustomApiUrl() || '');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -89,9 +91,68 @@ export const LoginScreen: React.FC = () => {
         <h3 className="text-xl font-bold text-slate-800 text-center mb-5">Sign In</h3>
 
         {error && (
-          <div className="mb-4 bg-red-50 border border-red-200 text-red-600 text-xs rounded-xl p-3 flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
-            <span>{error}</span>
+          <div className="mb-4 bg-red-50 border border-red-200 text-red-600 text-xs rounded-xl p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
+              <span>{error}</span>
+            </div>
+            <div className="flex items-center justify-between pt-1 border-t border-red-100">
+              <button
+                type="button"
+                onClick={async () => {
+                  setError(null);
+                  try {
+                    await api.getHealth();
+                    alert('Backend server is connected and healthy!');
+                  } catch (e: any) {
+                    setError(e.message || 'Server still unreachable. Please ensure backend is running.');
+                  }
+                }}
+                className="text-[11px] font-bold text-red-700 underline hover:text-red-900 inline-flex items-center gap-1"
+              >
+                <RefreshCw className="w-3 h-3" />
+                <span>Check Server Status</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowServerSettings(!showServerSettings)}
+                className="text-[11px] font-bold text-slate-500 underline hover:text-slate-700"
+              >
+                API Settings
+              </button>
+            </div>
+          </div>
+        )}
+
+        {showServerSettings && (
+          <div className="mb-4 p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2 text-xs">
+            <span className="font-bold text-slate-700 block">Backend Server URL</span>
+            <input
+              type="text"
+              value={customUrl}
+              onChange={(e) => setCustomUrl(e.target.value)}
+              placeholder="e.g. http://localhost:8000 or Render URL"
+              className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs"
+            />
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setCustomApiUrl(customUrl)}
+                className="px-3 py-1 bg-brand-primary text-white rounded-lg text-[10px] font-bold"
+              >
+                Save & Connect
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomApiUrl('');
+                  setCustomUrl('');
+                }}
+                className="px-3 py-1 bg-slate-200 text-slate-700 rounded-lg text-[10px] font-bold"
+              >
+                Reset Default
+              </button>
+            </div>
           </div>
         )}
 

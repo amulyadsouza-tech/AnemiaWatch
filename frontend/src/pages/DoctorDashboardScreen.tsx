@@ -38,7 +38,7 @@ export const DoctorDashboardScreen: React.FC = () => {
     fetchDashboard();
   }, [search]);
 
-  const viewPatientDetail = async (patientId: number) => {
+  const viewPatientDetail = async (patientId: number | string) => {
     try {
       const res = await api.getDoctorPatientDetail(patientId);
       setSelectedPatient(res);
@@ -267,22 +267,22 @@ export const DoctorDashboardScreen: React.FC = () => {
                           {s.screening_type === 'nail' ? 'Fingernail' : 'Conjunctiva'}
                         </td>
                         <td className="py-3.5 font-black text-brand-primary">
-                          {s.estimated_hb.toFixed(1)} {s.unit}
+                          {typeof s.estimated_hb === 'number' ? s.estimated_hb.toFixed(1) : (s.estimated_hb || 'N/A')} {s.unit || 'g/dL'}
                         </td>
                         <td className="py-3.5">
                           <span
                             className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
-                              s.category.includes('Severe')
+                              (s.category || '').includes('Severe')
                                 ? 'bg-red-100 text-red-700'
-                                : s.category.includes('Anemia')
+                                : (s.category || '').includes('Anemia')
                                 ? 'bg-amber-100 text-amber-700'
                                 : 'bg-emerald-100 text-emerald-700'
                             }`}
                           >
-                            {s.category}
+                            {s.category || 'Normal'}
                           </span>
                         </td>
-                        <td className="py-3.5 text-slate-600 font-semibold">{s.confidence.toFixed(1)}%</td>
+                        <td className="py-3.5 text-slate-600 font-semibold">{typeof s.confidence === 'number' ? s.confidence.toFixed(1) : (s.confidence || '0')}%</td>
                         <td className="py-3.5 text-slate-400">{new Date(s.created_at).toLocaleString('en-US')}</td>
                         <td className="py-3.5 text-right space-x-2">
                           <button

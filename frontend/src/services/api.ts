@@ -1,19 +1,43 @@
 // Resolve backend base URL cleanly:
-// 1. If VITE_API_URL is configured, use it.
-// 2. If in production (Vercel) and VITE_API_URL was omitted at build time,
-//    fallback to the deployed Render backend so requests never hit Vercel static hosting (which returns 405).
-// 3. In local dev (localhost), leave empty so Vite dev proxy handles /api → localhost:8000.
+// 1. If user configured a custom URL in localStorage ('anemiawatch_api_url'), use it.
+// 2. If VITE_API_URL is configured, use it.
+// 3. In local dev (localhost / 127.0.0.1) or same-origin SPA: use relative '' so requests go to /api
+//    (proxied by Vite to localhost:8000 in dev/preview, or served directly by FastAPI).
+// 4. In production on external hosts (e.g. Vercel), if no VITE_API_URL is given, use relative ''
+//    so vercel.json rewrites /api/* to the deployed backend without CORS issues.
+const customBackend = typeof window !== 'undefined'
+  ? (localStorage.getItem('anemiawatch_api_url') || '').trim().replace(/\/+$/, '')
+  : '';
+
 const envBackend = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
+
+const isLocalhost = typeof window !== 'undefined' && (
+  window.location.hostname === 'localhost' ||
+  window.location.hostname === '127.0.0.1' ||
+  window.location.hostname === '0.0.0.0' ||
+  window.location.hostname.endsWith('.local')
+);
+
 const isVercelHost = typeof window !== 'undefined' && (
   window.location.hostname.endsWith('.vercel.app') ||
   window.location.hostname.includes('vercel')
 );
 
-const DEFAULT_RENDER_BACKEND = 'https://anemiawatch-backend.onrender.com';
+let normalizedBackend = customBackend || envBackend;
 
-let normalizedBackend = envBackend;
-if (!normalizedBackend && (isVercelHost || import.meta.env.PROD)) {
-  normalizedBackend = DEFAULT_RENDER_BACKEND;
+if (!normalizedBackend) {
+  if (isLocalhost) {
+    if (typeof window !== 'undefined' && (window.location.port === '5173' || window.location.port === '4173' || window.location.port === '8000')) {
+      normalizedBackend = ''; // Use relative /api (handled by Vite proxy or FastAPI)
+    } else {
+      normalizedBackend = 'http://localhost:8000';
+    }
+  } else if (isVercelHost) {
+    // On Vercel: use relative /api (handled by vercel.json rewrites)
+    normalizedBackend = '';
+  } else {
+    normalizedBackend = '';
+  }
 }
 
 if (normalizedBackend.endsWith('/api')) {
@@ -22,6 +46,20 @@ if (normalizedBackend.endsWith('/api')) {
 
 export const BACKEND_BASE = normalizedBackend;
 export const API_BASE = BACKEND_BASE ? `${BACKEND_BASE}/api` : '/api';
+
+export function getCustomApiUrl(): string {
+  return typeof window !== 'undefined' ? (localStorage.getItem('anemiawatch_api_url') || '') : '';
+}
+
+export function setCustomApiUrl(url: string) {
+  if (typeof window === 'undefined') return;
+  if (url && url.trim()) {
+    localStorage.setItem('anemiawatch_api_url', url.trim().replace(/\/+$/, ''));
+  } else {
+    localStorage.removeItem('anemiawatch_api_url');
+  }
+  window.location.reload();
+}
 
 /**
  * Converts a relative image URL returned by the backend (/api/screening/file/...)
@@ -334,7 +372,7 @@ export const api = {
     }, 'Failed to load patient list');
   },
 
-  async getDoctorPatientDetail(id: number) {
+  async getDoctorPatientDetail(id: number | string) {
     return request(`/doctor/patient/${id}`, {
       headers: { ...getAuthHeader() },
     }, 'Failed to load patient history');
