@@ -67,118 +67,37 @@ def evaluate_image_quality(img_bgr):
 # ─────────────────────────────────────────────────────────────────────────────
 def _detect_nail_boxes(img_bgr):
     """
-    Multi-stage detection strategy:
-    1. Excludes face/forehead to prevent false positives on head/glasses.
-    2. Strict physiological skin thresholding (YCrCb + RGB).
-    3. Detects hand contour and isolates fingers using fingertip peak analysis
-       or separated finger morphology.
-    4. Guarantees nail boxes are placed exclusively on fingers.
-    Returns: list of (x, y, w, h) in image pixel coordinates, and skin mask.
+    Returns 4 standardized nail bed ROI bounding boxes in fixed, consistent positions.
+    Positions correspond directly to the 4 camera guide alignment boxes (Nail 1..4)
+    shown in the UI viewfinder, keeping nail boxes in a fixed place and completely
+    eliminating erratic jumps to wardrobe, foreheads, background objects, or paper edges.
     """
     h, w = img_bgr.shape[:2]
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
-    # 1. Multi-color space skin detection (YCrCb + RGB)
+    # Standardized fixed nail box dimensions matching the camera guide overlay
+    box_w = max(24, int(w * 0.14))
+    box_h = max(28, int(h * 0.18))
+    # Fixed vertical placement in upper-middle zone matching UI overlay
+    box_y = int(h * 0.34)
+
+    # 4 fixed horizontal alignment slots (Nail 1, Nail 2, Nail 3, Nail 4)
+    x_centers = [0.22, 0.40, 0.58, 0.76]
+
+    nail_boxes = []
+    for pct in x_centers:
+        bx = max(0, min(w - box_w, int(w * pct - box_w // 2)))
+        by = max(0, min(h - box_h, box_y))
+        nail_boxes.append((int(bx), int(by), int(box_w), int(box_h)))
+
+    # Compute physiological skin mask for diagnostic reference
     ycrcb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2YCrCb)
     cr = ycrcb[:, :, 1]
     cb = ycrcb[:, :, 2]
     r = img_bgr[:, :, 2].astype(int)
     g = img_bgr[:, :, 1].astype(int)
     b = img_bgr[:, :, 0].astype(int)
-
-    skin = (cr >= 130) & (cr <= 178) & (cb >= 80) & (cb <= 135) & (r > g) & (g > b) & ((r - g) > 8)
+    skin = (cr >= 130) & (cr <= 178) & (cb >= 80) & (cb <= 135) & (r > g) & (g > b)
     skin_mask = (skin.astype(np.uint8)) * 255
-
-    # 2. Exclude any detected face/forehead to prevent false positives on head/glasses
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=2, minSize=(80, 80))
-    for fx, fy, fw, fh in faces:
-        # Zero out face area with margin
-        y0 = max(0, fy - 15)
-        y1 = min(h, fy + fh + 20)
-        x0 = max(0, fx - 15)
-        x1 = min(w, fx + fw + 15)
-        skin_mask[y0:y1, x0:x1] = 0
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
-    skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-    skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_OPEN, kernel, iterations=1)
-
-    contours, _ = cv2.findContours(skin_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    valid_cnts = [c for c in contours if cv2.contourArea(c) > (h * w * 0.003)] if contours else []
-    valid_cnts.sort(key=cv2.contourArea, reverse=True)
-
-    nail_boxes = []
-
-    # ── Stage 1: Separated fingers in hand region ────────────────────────────
-    finger_candidates = []
-    for c in valid_cnts:
-        bx, by, bw, bh = cv2.boundingRect(c)
-        aspect = bh / max(1, bw)
-        # Check skin density within bounding box
-        roi_skin = skin_mask[by:by+bh, bx:bx+bw]
-        skin_ratio = np.mean(roi_skin > 0)
-        
-        # Fingers must be vertical/elongated, of moderate size, and densely skin-colored
-        if 1.1 <= aspect <= 5.0 and (w * 0.03) <= bw <= (w * 0.35) and bh <= (h * 0.70) and skin_ratio >= 0.45:
-            finger_candidates.append((bx, by, bw, bh))
-
-    # Cluster fingers: must be grouped together horizontally and vertically
-    if len(finger_candidates) >= 2:
-        finger_candidates.sort(key=lambda t: t[0]) # sort by X
-        # Group fingers that are vertically aligned (within 0.35*h of each other)
-        median_y = np.median([b[1] for b in finger_candidates])
-        aligned_fingers = [b for b in finger_candidates if abs(b[1] - median_y) < (h * 0.35)]
-        
-        if len(aligned_fingers) >= 2:
-            for bx, by, bw, bh in aligned_fingers[:4]:
-                nw = max(22, min(int(w * 0.18), int(bw * 0.80)))
-                nh = max(22, min(int(h * 0.18), int(bh * 0.32)))
-                nx = max(0, min(w - nw, bx + (bw - nw) // 2))
-                ny = max(0, min(h - nh, by + int(bh * 0.04)))
-                nail_boxes.append((int(nx), int(ny), int(nw), int(nh)))
-            return nail_boxes, skin_mask
-
-    # ── Stage 2: Connected Hand / Palm with Fingertip Peaks ───────────────────
-    if valid_cnts:
-        # Choose the largest skin contour that is NOT the face
-        hand_cnt = valid_cnts[0]
-        bx, by, bw, bh = cv2.boundingRect(hand_cnt)
-
-        hand_mask = np.zeros((h, w), dtype=np.uint8)
-        cv2.drawContours(hand_mask, [hand_cnt], -1, 255, -1)
-
-        y_top = np.zeros(bw)
-        for i, x in enumerate(range(bx, bx + bw)):
-            col = np.where(hand_mask[:, x] > 0)[0]
-            y_top[i] = col[0] if len(col) > 0 else (by + bh)
-
-        smooth_y = _gaussian_filter_1d(y_top, 10)
-        peaks = _find_peaks_1d(-smooth_y, distance=max(20, bw // 8), prominence=8)
-
-        valid_peaks = [
-            (bx + p, int(smooth_y[p]))
-            for p in peaks
-            if int(0.08 * w) <= (bx + p) <= int(0.92 * w) and int(smooth_y[p]) < (by + bh * 0.75)
-        ]
-
-        if len(valid_peaks) >= 2:
-            for px, py in valid_peaks[:4]:
-                nw = max(24, min(75, int(bw * 0.15)))
-                nh = max(24, min(75, int(bh * 0.18)))
-                nx = max(0, min(w - nw, px - nw // 2))
-                ny = max(0, min(h - nh, py + 4))
-                nail_boxes.append((int(nx), int(ny), int(nw), int(nh)))
-
-    # ── Stage 3: Camera Alignment Guide Sampling (Fail-safe Fallback) ────────
-    if len(nail_boxes) < 2:
-        nail_boxes = []
-        guide_y = int(h * 0.32)
-        guide_h = max(30, int(h * 0.15))
-        guide_w = max(30, int(w * 0.12))
-        for pct in [0.26, 0.42, 0.58, 0.74]:
-            gx = max(0, min(w - guide_w, int(w * pct - guide_w // 2)))
-            nail_boxes.append((int(gx), int(guide_y), int(guide_w), int(guide_h)))
 
     return nail_boxes, skin_mask
 

@@ -146,41 +146,14 @@ export const NailBedCaptureScreen: React.FC = () => {
       <div className="flex-1 px-4 flex flex-col items-center justify-center relative">
         <div className="w-full aspect-[3/4] max-h-[460px] bg-slate-900 rounded-[28px] overflow-hidden relative shadow-2xl border-2 border-white/20 flex items-center justify-center">
           {!previewUrl ? (
-            <>
-              {/* Real Live Video */}
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                className="w-full h-full object-cover"
-              />
-
-              {/* Hand & 4 Fingernails Alignment Overlay */}
-              <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-6">
-                {/* 4 Nail Target Boxes matching research paper images.jpg */}
-                <div className="w-full max-w-[280px] grid grid-cols-4 gap-2 mb-2">
-                  {[1, 2, 3, 4].map((n) => (
-                    <div
-                      key={n}
-                      className="aspect-[4/5] rounded-xl border-2 border-dashed border-white/80 bg-white/10 flex flex-col items-center justify-between p-1.5 shadow-sm"
-                    >
-                      <span className="text-[9px] font-bold text-white bg-brand-primary/80 px-1 rounded">
-                        Nail {n}
-                      </span>
-                      <div className="w-4 h-4 border border-brand-accent/90 rounded-xs" />
-                    </div>
-                  ))}
-                </div>
-
-                {/* Hand outline guide */}
-                <div className="w-56 h-36 border border-white/40 rounded-b-3xl bg-white/5 flex items-center justify-center text-center p-3">
-                  <span className="text-[11px] text-white/80 font-medium leading-snug">
-                    Align your 4 fingers facing the camera inside the alignment box
-                  </span>
-                </div>
-              </div>
-            </>
+            /* Real Live Video */
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className="w-full h-full object-cover"
+            />
           ) : (
             /* Image Preview */
             <img
@@ -189,6 +162,33 @@ export const NailBedCaptureScreen: React.FC = () => {
               className="w-full h-full object-cover"
             />
           )}
+
+          {/* Fixed 4 Fingernails Alignment Overlay */}
+          <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-6 z-10">
+            {/* 4 Fixed Nail Target Boxes */}
+            <div className="w-full max-w-[280px] grid grid-cols-4 gap-2 mb-2">
+              {[1, 2, 3, 4].map((n) => (
+                <div
+                  key={n}
+                  className="aspect-[4/5] rounded-xl border-2 border-dashed border-white/90 bg-white/10 flex flex-col items-center justify-between p-1.5 shadow-md backdrop-blur-[1px]"
+                >
+                  <span className="text-[9px] font-bold text-white bg-brand-primary/90 px-1.5 py-0.5 rounded shadow-xs">
+                    Nail {n}
+                  </span>
+                  <div className="w-4 h-4 border border-brand-accent rounded-xs" />
+                </div>
+              ))}
+            </div>
+
+            {/* Hand outline guide */}
+            <div className="w-56 h-36 border border-white/40 rounded-b-3xl bg-white/5 flex items-center justify-center text-center p-3">
+              <span className="text-[11px] text-white/90 font-medium leading-snug">
+                {previewUrl
+                  ? 'Ensure all 4 fingernails sit inside the 4 fixed boxes'
+                  : 'Align your 4 fingers facing the camera inside the alignment box'}
+              </span>
+            </div>
+          </div>
 
           {/* Camera Error / Fallback Banner */}
           {cameraError && !previewUrl && (
