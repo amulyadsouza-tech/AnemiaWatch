@@ -81,9 +81,19 @@ export const LoginScreen: React.FC = () => {
       </div>
 
       {/* Top Graphic Area */}
-      <div className="flex-1 flex flex-col items-center justify-center p-4 text-white">
-        <h2 className="text-2xl font-bold tracking-tight mb-1 text-center">Welcome Back</h2>
-        <p className="text-xs text-white/80 text-center">Monitor your blood health regularly</p>
+      <div className="flex-1 flex flex-col items-center justify-center p-4 text-white gap-4">
+        {/* Doctor-patient illustration */}
+        <div className="w-32 h-28 rounded-2xl bg-white/15 border border-white/20 overflow-hidden flex items-center justify-center shadow-md">
+          <img
+            src="/assets/doctor_patient_hero.png"
+            alt="Doctor and patient illustration"
+            className="w-full h-full object-contain p-1"
+          />
+        </div>
+        <div className="text-center">
+          <h2 className="text-2xl font-bold tracking-tight mb-1">Welcome Back</h2>
+          <p className="text-xs text-white/80">Monitor your blood health regularly</p>
+        </div>
       </div>
 
       {/* Bottom Sheet Card matching InShot_20240621_080337187_frame_189.png */}

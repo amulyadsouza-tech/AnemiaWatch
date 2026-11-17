@@ -193,16 +193,16 @@ def process_nail_image(image_path, output_dir):
     # Quality assessment
     quality = evaluate_image_quality(img_bgr)
 
-    # Detect nail ROIs
+    # Detect nail ROIs (always fixed 4-slot positions)
     nail_boxes, skin_mask_debug = _detect_nail_boxes(img_bgr)
+    # _detect_nail_boxes always returns 4 boxes; this guard is a safety net only
     if not nail_boxes:
-        # Failsafe fallback: central guided ROI sampling
-        guide_y = int(h * 0.28)
-        guide_h = max(28, int(h * 0.16))
-        guide_w = max(28, int(w * 0.12))
+        box_w = max(24, int(w * 0.14))
+        box_h = max(28, int(h * 0.18))
+        box_y = int(h * 0.34)
         nail_boxes = [
-            (int(max(0, min(w - guide_w, w * pct - guide_w // 2))), guide_y, guide_w, guide_h)
-            for pct in [0.25, 0.42, 0.58, 0.75]
+            (max(0, min(w - box_w, int(w * pct - box_w // 2))), box_y, box_w, box_h)
+            for pct in [0.22, 0.40, 0.58, 0.76]
         ]
 
     annotated = img_bgr.copy()
